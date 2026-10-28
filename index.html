@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- viewport-fit=cover ＋ 下面的 safe-area padding，才不會被瀏海與底部橫條蓋到 -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no"
+    />
+    <meta name="theme-color" content="#0d1117" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="台股生涯" />
+    <title>台股生涯模擬</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <link rel="icon" href="./icon-192.png" />
+    <script type="module" crossorigin src="./assets/index-gx5Fz8gJ.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BtZhVVlA.css">
+  </head>
+  <body>
+    <header class="bar">
+      <div class="stats">
+        <span class="stat"><b id="age">18 歲 0 個月</b><i>年齡</i></span>
+        <span class="stat"><b id="session-day">第 0 日</b><i>本檔交易日</i></span>
+        <span class="stat"><b id="cash">500,000</b><i>現金</i></span>
+        <span class="stat"><b id="holding">0</b><i>持股（股）</i></span>
+        <span class="stat"><b id="unrealized">0</b><i>未實現損益</i></span>
+        <span class="stat"><b id="equity">500,000</b><i>總資產</i></span>
+      </div>
+      <!--
+        掛單列表放在 header 的流排版裡，不是浮在圖上。
+        浮動版會蓋住最右邊那幾根 K 棒，而那幾根正好是你在看的（achi 2026-10-27）。
+      -->
+      <aside id="orders" class="orders" hidden>
+        <div class="orders-head">
+          <strong>智慧單</strong>
+          <span class="tabs">
+            <button id="orders-tab-live" class="tab is-on" type="button">監控中</button>
+            <button id="orders-tab-done" class="tab" type="button">已觸發／完成</button>
+          </span>
+          <button id="orders-close" class="icon" type="button" aria-label="收起">✕</button>
+        </div>
+        <ul id="orders-list" class="orders-list"></ul>
+      </aside>
+
+      <div class="modes">
+        <button id="mode-basic" class="mode is-on" type="button">基本看盤</button>
+        <button id="mode-triple" class="mode" type="button">日週月三面板</button>
+        <button id="link-crosshair" class="mode" type="button" disabled>十字線聯動</button>
+        <button id="smart-only" class="mode" type="button">只用智慧單</button>
+        <span id="offline-badge" class="badge" hidden title="沒有連到伺服器，資料來自裝置上的離線包">離線</span>
+        <span id="practice-badge" class="badge warn" hidden></span>
+      </div>
+    </header>
+
+    <div class="readout" id="readout" aria-live="off">
+      <span class="src" id="readout-src">最新</span
+      ><span>開 <b>—</b></span><span>高 <b>—</b></span><span>低 <b>—</b></span
+      ><span>收 <b>—</b></span><span>漲跌 <b>—</b></span><span>量 <b>—</b></span>
+    </div>
+
+    <!--
+      狀態訊息自己一列，**高度固定、永遠存在**（沒訊息就是空白）。
+      原本塞在 footer 的按鈕列裡，字一多就換行、footer 變高，K 線圖跟著被擠矮——
+      訊息出現與消失圖都會跳一下（achi 2026-10-28 回報）。
+    -->
+    <div class="status-bar"><span id="pending" class="pending"></span></div>
+
+    <main class="chart-wrap">
+      <canvas id="chart"></canvas>
+    </main>
+
+    <footer class="bar">
+      <div class="group">
+        <button id="step-day" class="primary" type="button">＋1 日</button>
+        <button id="step-week" class="primary" type="button">＋1 週（5 根）</button>
+      </div>
+      <div class="group">
+        <label for="shares">股數</label>
+        <input id="shares" type="number" min="1" step="1" value="1000" />
+        <button id="buy" class="buy" type="button">買進</button>
+        <button id="sell" class="sell" type="button">賣出</button>
+        <button id="all-in" type="button">全買</button>
+        <button id="all-out" type="button">全賣</button>
+      </div>
+      <div class="group">
+        <button id="smart-open" type="button">智慧單</button>
+        <button id="practice-open" type="button">指定股票</button>
+        <button id="statement-open" type="button">歷史對帳單</button>
+      </div>
+      <div class="group">
+        <button id="settle" type="button">結算換股</button>
+      </div>
+    </footer>
+
+    <!--
+      練習模式：自己指定要玩哪一檔。
+      既然答案在你手上，年份就不藏了，而且這種局**不計入生涯**——
+      知道答案的局混進統計，「停損救到你幾次」那些數字就沒意義了。
+    -->
+    <section id="practice" class="statement" hidden>
+      <div class="statement-inner practice-inner">
+        <div class="smart-head">
+          <h2>指定股票來玩</h2>
+          <button id="practice-close" class="icon" type="button" aria-label="關閉">✕</button>
+        </div>
+        <p class="note">
+          自己選的這局<strong>不計入生涯</strong>：資金另算、不進歷史對帳單，年齡也不會增加。
+          年份不藏，橫軸就是真實日期。隨機抽的正式局不受影響。
+        </p>
+
+        <div class="field">
+          <label for="practice-query">股票</label>
+          <div class="controls">
+            <input
+              id="practice-query"
+              type="search"
+              list="practice-list"
+              placeholder="代號或名稱，例如 2330 或 台積電"
+              autocomplete="off"
+            />
+            <datalist id="practice-list"></datalist>
+          </div>
+        </div>
+
+        <ul id="practice-hits" class="orders-list practice-hits"></ul>
+        <p class="note err" id="practice-error" hidden></p>
+
+        <div class="smart-actions">
+          <span class="hint" id="practice-count"></span>
+          <button id="practice-start" class="primary submit" type="button">開始練習</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 新增智慧單。版面比照券商 App：先選單別，再填觸發條件與委託條件。 -->
+    <section id="smart" class="statement" hidden>
+      <div class="statement-inner smart-inner">
+        <div class="smart-head">
+          <h2 id="smart-title">新增快速單</h2>
+          <button id="smart-close" class="icon" type="button" aria-label="關閉">✕</button>
+        </div>
+
+        <div id="smart-picker" class="smart-picker">
+          <h3>選擇智慧單別</h3>
+          <div class="picker-grid">
+            <button class="kind is-on" type="button" data-kind="quick">快速單</button>
+            <button class="kind" type="button" data-kind="longLife">長效單</button>
+            <button class="kind" type="button" data-kind="protect">停損停利單</button>
+            <button class="kind" type="button" data-kind="bracket">母子單</button>
+            <button class="kind" type="button" data-kind="trailing">移動出場單</button>
+          </div>
+        </div>
+
+        <div id="smart-form">
+          <h3 class="section-head">設定觸發條件</h3>
+
+          <div class="field" data-for="quick longLife bracket">
+            <label for="f-trigger-field">觸發條件</label>
+            <div class="controls">
+              <select id="f-trigger-field">
+                <option value="price">成交價</option>
+                <option value="gainPct">漲幅</option>
+                <option value="lossPct">跌幅</option>
+                <option value="gainAmt">上漲</option>
+                <option value="lossAmt">下跌</option>
+                <option value="volume">總量</option>
+              </select>
+              <select id="f-trigger-op">
+                <option value="gte">大於等於</option>
+                <option value="lte">小於等於</option>
+              </select>
+              <input id="f-trigger-value" type="number" step="0.01" min="0" placeholder="數值" />
+              <span class="unit" id="f-trigger-unit"></span>
+            </div>
+          </div>
+
+          <div class="field" data-for="protect">
+            <label>停損停利</label>
+            <div class="controls">
+              <button id="f-mode-stop" class="seg is-on" type="button">停損</button>
+              <button id="f-mode-take" class="seg" type="button">停利</button>
+            </div>
+          </div>
+
+          <div class="field" data-for="protect">
+            <label for="f-protect-price">觸發價</label>
+            <div class="controls">
+              <span class="static">成交價</span>
+              <!-- 方向是跟著停損／停利自動定的，印出來讓人看得到自己設了哪一邊 -->
+              <span class="static" id="f-protect-op">小於等於</span>
+              <input id="f-protect-price" type="number" step="0.01" min="0" placeholder="價格" />
+              <span class="hint" id="f-protect-hint"></span>
+            </div>
+          </div>
+
+          <div class="field" data-for="trailing">
+            <label for="f-base-price">基準價</label>
+            <div class="controls">
+              <input id="f-base-price" type="number" step="0.01" min="0" placeholder="漲過這個價才啟動" />
+            </div>
+          </div>
+
+          <div class="field" data-for="trailing">
+            <label for="f-pullback">區間高點回檔</label>
+            <div class="controls">
+              <select id="f-pullback-mode">
+                <option value="amount">元</option>
+                <option value="percent">%</option>
+              </select>
+              <input id="f-pullback" type="number" step="0.01" min="0" placeholder="回檔多少" />
+              <span class="hint">高價股建議用 %，500 元的股票回檔 5 元只有 1%</span>
+            </div>
+          </div>
+
+          <div class="field" data-for="trailing">
+            <label for="f-stop-price">停損價</label>
+            <div class="controls">
+              <input id="f-stop-price" type="number" step="0.01" min="0" placeholder="可留空" />
+              <span class="hint">跟啟動與否無關，跌到就出場</span>
+            </div>
+          </div>
+
+          <div class="field" data-for="bracket">
+            <label>母單委託</label>
+            <div class="controls">
+              <button id="f-parent-buy" class="seg is-on" type="button">買進</button>
+              <button id="f-parent-sell" class="seg" type="button">賣出</button>
+              <input id="f-parent-shares" type="number" min="1" step="1" value="1000" />
+              <span class="unit">股</span>
+            </div>
+          </div>
+
+          <div class="field" data-for="bracket">
+            <label for="f-child-field">子單條件</label>
+            <div class="controls">
+              <select id="f-child-field">
+                <option value="price">成交價</option>
+                <option value="gainPct">漲幅</option>
+                <option value="lossPct">跌幅</option>
+                <option value="gainAmt">上漲</option>
+                <option value="lossAmt">下跌</option>
+                <option value="volume">總量</option>
+              </select>
+              <select id="f-child-op">
+                <option value="lte">小於等於</option>
+                <option value="gte">大於等於</option>
+              </select>
+              <input id="f-child-value" type="number" step="0.01" min="0" placeholder="數值" />
+              <span class="unit" id="f-child-unit"></span>
+            </div>
+          </div>
+
+          <div class="field" data-for="bracket">
+            <label>子單委託</label>
+            <div class="controls">
+              <button id="f-child-buy" class="seg" type="button">買進</button>
+              <button id="f-child-sell" class="seg is-on" type="button">賣出</button>
+              <input id="f-child-shares" type="number" min="1" step="1" value="1000" />
+              <span class="unit">股</span>
+            </div>
+          </div>
+
+          <div class="field" data-for="quick protect trailing bracket">
+            <label for="f-expire">監控時間</label>
+            <div class="controls">
+              <select id="f-expire-mode">
+                <option value="forever">永久有效</option>
+                <option value="until">到第 N 日為止</option>
+              </select>
+              <input id="f-expire" type="number" min="1" step="1" placeholder="第幾日" />
+            </div>
+          </div>
+
+          <div class="field" data-for="longLife">
+            <label>監控期間</label>
+            <div class="controls">
+              <span class="static">第 <b id="f-today">0</b> 日起</span>
+              <span class="unit">至第</span>
+              <input id="f-longlife-until" type="number" min="1" step="1" placeholder="第幾日" />
+              <span class="unit">日止</span>
+            </div>
+          </div>
+
+          <h3 class="section-head" data-for="quick protect trailing longLife">設定委託條件</h3>
+
+          <div class="field" data-for="quick longLife">
+            <label>買賣別</label>
+            <div class="controls">
+              <button id="f-side-buy" class="seg is-on" type="button">買進</button>
+              <button id="f-side-sell" class="seg" type="button">賣出</button>
+            </div>
+          </div>
+
+          <div class="field" data-for="quick protect trailing">
+            <label for="f-shares">股數</label>
+            <div class="controls">
+              <input id="f-shares" type="number" min="1" step="1" value="1000" />
+              <span class="unit">股</span>
+              <button id="f-shares-all" class="link" type="button">全部持股</button>
+            </div>
+          </div>
+
+          <div class="field" data-for="longLife">
+            <label for="f-per-fill">每次委託</label>
+            <div class="controls">
+              <input id="f-per-fill" type="number" min="1" step="1" value="1000" />
+              <span class="unit">股</span>
+            </div>
+          </div>
+
+          <div class="field" data-for="longLife">
+            <label for="f-target">欲成交數量</label>
+            <div class="controls">
+              <input id="f-target" type="number" min="1" step="1" value="3000" />
+              <span class="unit">股</span>
+            </div>
+          </div>
+
+          <p class="note" id="smart-explain"></p>
+          <p class="note err" id="smart-error" hidden></p>
+        </div>
+
+        <div class="smart-actions">
+          <button id="smart-clear" type="button">清除</button>
+          <button id="smart-switch" type="button">切換單別</button>
+          <button id="smart-submit" class="primary submit" type="button">送出</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="statement" class="statement" hidden>
+      <div class="statement-inner">
+        <h2>歷史對帳單</h2>
+        <p class="note">
+          結算之後才揭露年份、股票代號與名稱。跑的是<strong>真實台股歷史日 K</strong>，價格與成交量都沒有改過，只有遊戲畫面上的日期被位移過。
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>年份</th>
+              <th>代號</th>
+              <th>名稱</th>
+              <th>玩法</th>
+              <th>出場原因</th>
+              <th>交易日</th>
+              <th>損益</th>
+              <th>報酬率</th>
+              <th>若不停損</th>
+            </tr>
+          </thead>
+          <tbody id="statement-rows"></tbody>
+        </table>
+        <div class="statement-actions">
+          <button id="statement-export" type="button">下載 Markdown</button>
+          <button id="statement-copy" type="button">複製到剪貼簿</button>
+          <span id="statement-copied" class="hint"></span>
+          <button id="statement-close" class="primary" type="button">繼續下一檔</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="career-end" class="statement" hidden>
+      <div class="statement-inner">
+        <h2 id="career-title">生涯結束</h2>
+        <p class="note" id="career-reason"></p>
+        <dl class="summary" id="career-summary"></dl>
+        <table>
+          <thead>
+            <tr>
+              <th>年份</th>
+              <th>代號</th>
+              <th>名稱</th>
+              <th>玩法</th>
+              <th>出場原因</th>
+              <th>交易日</th>
+              <th>損益</th>
+              <th>報酬率</th>
+              <th>若不停損</th>
+            </tr>
+          </thead>
+          <tbody id="career-rows"></tbody>
+        </table>
+        <div class="statement-actions">
+          <button id="career-export" type="button">下載 Markdown</button>
+          <button id="career-copy" type="button">複製到剪貼簿</button>
+          <span id="career-copied" class="hint"></span>
+          <button id="career-restart" class="primary" type="button">重新開始</button>
+        </div>
+      </div>
+    </section>
+
+  </body>
+</html>
